@@ -1,4 +1,3 @@
-// main.c (Corrigido)
 #include <stdio.h>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
@@ -21,9 +20,7 @@
 #define I2C0_SDA_PIN 0
 #define I2C0_SCL_PIN 1
 
-// --- Funções Wrapper para a interface do AHT10 (LÓGICA CORRIGIDA) ---
-// Usando a mesma lógica do seu código de teste que funcionou.
-
+// --- Funções Wrapper para a interface do AHT10 ---
 int i2c_write_wrapper(uint8_t addr, const uint8_t *data, uint16_t len) {
     int result = i2c_write_blocking(I2C0_PORT, addr, data, len, false);
     // Retorna -1 em caso de erro (retorno negativo), 0 caso contrário.

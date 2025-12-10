@@ -1,5 +1,3 @@
-// servo.c
-
 #include "servo.h"
 #include "hardware/pwm.h"
 #include "hardware/clocks.h"
@@ -49,8 +47,7 @@ void servo_set_pulse_width(uint gpio_pin, uint32_t pulse_width_us) {
     uint channel_num = pwm_gpio_to_channel(gpio_pin);
 
     // Define o nível do canal, que corresponde diretamente à largura do pulso em us
-    // devido à nossa configuração de clock
-    // CORREÇÃO 2: A função correta é pwm_set_chan_level()
+    // devido à configuração de clock
     pwm_set_chan_level(slice_num, channel_num, pulse_width_us);
 }
 
