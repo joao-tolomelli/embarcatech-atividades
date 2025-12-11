@@ -43,6 +43,7 @@ add_executable(main
         lib/ssd1306/ssd1306.c
         lib/wifi/wifi.c
         lib/mqtt/mqtt.c
+        lib/aht10/aht10.c
         )
 
 pico_set_program_name(main "main")
@@ -66,6 +67,7 @@ target_include_directories(main PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/lib/ssd1306
         ${CMAKE_CURRENT_LIST_DIR}/lib/wifi
         ${CMAKE_CURRENT_LIST_DIR}/lib/mqtt
+        ${CMAKE_CURRENT_LIST_DIR}/lib/aht10
 )
 
 # Add any user requested libraries
