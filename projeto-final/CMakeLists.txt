@@ -44,6 +44,7 @@ add_executable(main
         lib/wifi/wifi.c
         lib/mqtt/mqtt.c
         lib/aht10/aht10.c
+        lib/bh1750/bh1750.c
         )
 
 pico_set_program_name(main "main")
@@ -68,6 +69,7 @@ target_include_directories(main PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/lib/wifi
         ${CMAKE_CURRENT_LIST_DIR}/lib/mqtt
         ${CMAKE_CURRENT_LIST_DIR}/lib/aht10
+        ${CMAKE_CURRENT_LIST_DIR}/lib/bh1750
 )
 
 # Add any user requested libraries

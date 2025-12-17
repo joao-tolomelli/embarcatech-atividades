@@ -3,7 +3,7 @@
 //===============================
 // Configurações MQTT
 //===============================
-#define MQTT_BROKER        "192.168.1.110"  
+#define MQTT_BROKER        "192.168.5.196"  
 #define MQTT_BROKER_PORT   1883
 #define MQTT_CLIENT_ID     "pico_freertos_client"
 #define MQTT_KEEPALIVE     60
