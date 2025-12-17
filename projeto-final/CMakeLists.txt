@@ -45,6 +45,8 @@ add_executable(main
         lib/mqtt/mqtt.c
         lib/aht10/aht10.c
         lib/bh1750/bh1750.c
+        lib/MPU6050/MPU6050.cpp
+        lib/mpu_wrapper/mpu_wrapper.cpp
         )
 
 pico_set_program_name(main "main")
@@ -70,6 +72,8 @@ target_include_directories(main PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/lib/mqtt
         ${CMAKE_CURRENT_LIST_DIR}/lib/aht10
         ${CMAKE_CURRENT_LIST_DIR}/lib/bh1750
+        ${CMAKE_CURRENT_LIST_DIR}/lib/MPU6050
+        ${CMAKE_CURRENT_LIST_DIR}/lib/mpu_wrapper
 )
 
 # Add any user requested libraries

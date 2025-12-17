@@ -1,5 +1,8 @@
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
+
+// Imports do SDK
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
 #include "pico/cyw43_arch.h"
@@ -15,9 +18,11 @@
 #include "mqtt.h"
 #include "aht10.h"
 #include "bh1750.h"
+#include "mpu_wrapper.h"
 
 // Definição do limiar de luz para considerar a caixa aberta
 #define LIMIAR_LUX 10.0f
+#define LIMIAR_COLISAO 2.5f
 
 // Estrutura global para dados dos sensores
 typedef struct
@@ -25,12 +30,14 @@ typedef struct
     float temperatura;
     float umidade;
     bool caixa_aberta;
+    bool colisao;
 } sensor_data_t;
 
 volatile sensor_data_t sensor_data;
 
 // Mutex para proteger acesso aos dados dos sensores
 SemaphoreHandle_t xSensorMutex;
+SemaphoreHandle_t xI2CMutex;
 
 // Configurações do I2C0
 #define I2C0_PORT i2c0
@@ -52,6 +59,7 @@ void display_task(void *pv);
 void mqtt_task(void *pv);
 void aht10_task(void *pv);
 void bh1750_task(void *pv);
+void mpu6050_task(void *pv);
 
 int main()
 {
@@ -94,6 +102,12 @@ int main()
     // Inicializa BH1750
     printf("Inicializando BH1750...\n");
     bh1750_init(I2C0_PORT);
+    sleep_ms(1000);
+
+    // Inicializa MPU6050
+    printf("Inicializando MPU6050...\n");
+    mpu6050_init_c(I2C0_PORT, 0x68);
+    sleep_ms(1000);
 
     // Inicializa o sensor AHT10
     // Define estrutura do sensor
@@ -111,18 +125,19 @@ int main()
             sleep_ms(1000);
     }
 
-    // Cria o Mutex
+    // Cria os Mutex
     xSensorMutex = xSemaphoreCreateMutex();
-    if (xSensorMutex == NULL)
-    {
-        printf("Erro ao criar Mutex!\n");
+    xI2CMutex = xSemaphoreCreateMutex();
+    if (xSensorMutex == NULL || xI2CMutex == NULL) {
+        printf("Erro ao criar Mutexes!\n");
     }
 
     // Cria tasks
-    xTaskCreate(mqtt_task, "mqtt", 4096, NULL, 2, NULL);
     xTaskCreate(display_task, "display", 3072, &disp, 1, NULL);
+    xTaskCreate(mqtt_task, "mqtt", 4096, NULL, 2, NULL);
     xTaskCreate(aht10_task, "AHT10", 2048, &aht10, 3, NULL);
     xTaskCreate(bh1750_task, "BH1750", 2048, NULL, 3, NULL);
+    xTaskCreate(mpu6050_task, "MPU6050", 2048, NULL, 3, NULL);
 
     // inicia FreeRTOS
     vTaskStartScheduler();
@@ -135,74 +150,92 @@ int main()
 
 void aht10_task(void *pv)
 {
-    // 1. Recupera o ponteiro do sensor passado via parâmetro
     AHT10_Handle *sensor = (AHT10_Handle *)pv;
-
     float temp_lida, hum_lida;
 
     while (true)
     {
-        // Tenta ler o sensor
-        if (AHT10_ReadTemperatureHumidity(sensor, &temp_lida, &hum_lida))
-        {
+        bool leitura_ok = false;
 
-            // Entra na Seção Crítica (Protege a struct global)
-            // Espera até 100ms pelo Mutex se ele estiver ocupado
+        // --- PROTEÇÃO DO I2C ---
+        if (xSemaphoreTake(xI2CMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+            leitura_ok = AHT10_ReadTemperatureHumidity(sensor, &temp_lida, &hum_lida);
+            xSemaphoreGive(xI2CMutex);
+        }
+
+        if (leitura_ok)
+        {
             if (xSemaphoreTake(xSensorMutex, pdMS_TO_TICKS(100)) == pdTRUE)
             {
-
                 sensor_data.temperatura = temp_lida;
                 sensor_data.umidade = hum_lida;
-
-                // Libera o Mutex para as outras tasks (MQTT/Display)
                 xSemaphoreGive(xSensorMutex);
             }
         }
-        else
-        {
-            printf("Erro ao ler AHT10\n");
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(2000)); 
     }
 }
 
 // --- TASK DO SENSOR DE LUMINOSIDADE ---
 void bh1750_task(void *pv)
 {
-    float lux_lido;
+    float lux_lido = -1.0f; // Inicializa com erro
 
     while (true)
     {
-        // Lê o sensor (O driver usa I2C blocking, ok para esta arquitetura simples)
-        lux_lido = bh1750_read_lux(I2C0_PORT);
+        // --- PROTEÇÃO DO I2C ---
+        if (xSemaphoreTake(xI2CMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            lux_lido = bh1750_read_lux(I2C0_PORT);
+            xSemaphoreGive(xI2CMutex);
+        }
+        // -----------------------
 
         if (lux_lido >= 0)
         {
-            // Se leu corretamente, pega o Mutex para atualizar a global
             if (xSemaphoreTake(xSensorMutex, pdMS_TO_TICKS(100)) == pdTRUE)
             {
-
-                // Lógica de Segurança:
-                if (lux_lido > LIMIAR_LUX)
-                {
-                    sensor_data.caixa_aberta = true;
-                }
-                else
-                {
-                    sensor_data.caixa_aberta = false;
-                }
-
+                sensor_data.caixa_aberta = (lux_lido > LIMIAR_LUX);
                 xSemaphoreGive(xSensorMutex);
             }
         }
-        else
-        {
-            printf("Erro leitura BH1750\n");
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
+
+// --- TASK MPU6050 (COLISÃO) ---
+void mpu6050_task(void *pv) {
+    float ax, ay, az;
+    float magnitude;
+    int contador_reset_colisao = 0;
+
+    while(true) {
+        // --- PROTEÇÃO DO I2C ---
+        if (xSemaphoreTake(xI2CMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            mpu6050_read_accel_c(&ax, &ay, &az);
+            xSemaphoreGive(xI2CMutex);
+        // -----------------------
+
+            magnitude = sqrtf((ax * ax) + (ay * ay) + (az * az));
+            bool impacto_detectado = (magnitude > LIMIAR_COLISAO);
+
+            if (impacto_detectado) {
+                printf("Impacto! Mag: %.2f\n", magnitude);
+                contador_reset_colisao = 100; 
+            }
         }
 
-        // Lê a cada 500ms para resposta rápida se abrirem a caixa
-        vTaskDelay(pdMS_TO_TICKS(500));
+        // Atualiza struct global (Mutex de DADOS)
+        if (xSemaphoreTake(xSensorMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+             // ... sua lógica de colisão original ...
+             if (contador_reset_colisao > 0) {
+                sensor_data.colisao = true;
+                contador_reset_colisao--;
+            } else {
+                sensor_data.colisao = false;
+            }
+            xSemaphoreGive(xSensorMutex);
+        }
+        vTaskDelay(pdMS_TO_TICKS(100)); 
     }
 }
 
@@ -215,6 +248,7 @@ void display_task(void *pv)
     float temp_local = 0.0f;
     float hum_local = 0.0f;
     const char *status_caixa;
+    const char *status_colisao;
 
     while (true)
     {
@@ -223,6 +257,7 @@ void display_task(void *pv)
             temp_local = sensor_data.temperatura;
             hum_local = sensor_data.umidade;
             status_caixa = sensor_data.caixa_aberta ? "Aberta" : "Fechada";
+            status_colisao = sensor_data.colisao ? "SIM" : "nao";
             xSemaphoreGive(xSensorMutex);
         }
 
@@ -238,6 +273,9 @@ void display_task(void *pv)
         sprintf(buffer, "Caixa: %s", status_caixa);
         ssd1306_draw_string(disp, 10, 40, 1, buffer);
 
+        sprintf(buffer, "Colisao: %s", status_colisao);
+        ssd1306_draw_string(disp, 10, 55, 1, buffer);
+
         ssd1306_show(disp);
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
@@ -249,6 +287,7 @@ void mqtt_task(void *pv)
     float temp_local;
     float hum_local;
     const char *status_caixa;
+    const char *status_colisao;
 
     while (1)
     {
@@ -261,11 +300,12 @@ void mqtt_task(void *pv)
                 temp_local = sensor_data.temperatura;
                 hum_local = sensor_data.umidade;
                 status_caixa = sensor_data.caixa_aberta ? "aberta" : "fechada";
+                status_colisao = sensor_data.colisao ? "SIM" : "nao";
 
                 xSemaphoreGive(xSensorMutex);
 
                 // Formata os dados em uma string JSON
-                sprintf(payload, "{\"temperatura\": %.1f, \"umidade\": %.1f, \"caixa\": \"%s\"}", temp_local, hum_local, status_caixa);
+                sprintf(payload, "{\"temperatura\": %.1f, \"umidade\": %.1f, \"caixa\": \"%s\", \"colisao\": \"%s\"}", temp_local, hum_local, status_caixa, status_colisao);
 
                 // Publica os dados no tópico MQTT. Você pode alterar "pico/dados".
                 mqtt_publish_async("pico/dados", payload);
